@@ -25,7 +25,7 @@ app.use(healthRoutes);
 app.use("/auth", authRoutes);
 
 sequelize
-  .sync()
+  .sync({ alter: true })
   .then(() => {
     app.listen(PORT, () => {
       // eslint-disable-next-line no-console

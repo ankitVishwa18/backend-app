@@ -10,8 +10,14 @@ router.get("/google", authController.googleAuth);
 router.get(
   "/google/callback",
   authController.googleCallback,
-  authController.googleCallbackSuccess
+  authController.googleCallbackSuccess,
 );
 router.get("/me", authMiddleware, authController.me);
+router.get("/gmail/messages", authMiddleware, authController.getMyEmails);
+router.get(
+  "/gmail/subscriptions",
+  authMiddleware,
+  authController.getSubscriptionEmails,
+);
 
 module.exports = router;

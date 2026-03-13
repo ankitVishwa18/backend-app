@@ -15,7 +15,7 @@ if (googleEnabled) {
           process.env.GOOGLE_CALLBACK_URL ||
           "http://localhost:5000/auth/google/callback",
       },
-      async (_accessToken, _refreshToken, profile, done) => {
+      async (accessToken, refreshToken, profile, done) => {
         try {
           const email = profile.emails?.[0]?.value;
           if (!email) {
@@ -23,15 +23,17 @@ if (googleEnabled) {
           }
 
           return done(null, {
-            email,
+            email: profile.emails?.[0]?.value,
             name: profile.displayName || email.split("@")[0],
             googleId: profile.id,
+            accessToken,
+            refreshToken,
           });
         } catch (error) {
           return done(error);
         }
-      }
-    )
+      },
+    ),
   );
 }
 

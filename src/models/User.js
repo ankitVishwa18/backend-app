@@ -31,13 +31,16 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
         defaultValue: DataTypes.NOW,
       },
+      google_access_token: { type: DataTypes.TEXT },
+      google_refresh_token: { type: DataTypes.TEXT },
+      google_token_expiry: { type: DataTypes.TEXT },
     },
     {
       sequelize,
       modelName: "User",
       tableName: "users",
       timestamps: false,
-    }
+    },
   );
 
   return User;
