@@ -6,6 +6,7 @@ const { passport } = require("./config/passport");
 const { sequelize } = require("./models");
 const authRoutes = require("./routes/authRoutes");
 const healthRoutes = require("./routes/healthRoutes");
+const authController = require("./controllers/authController");
 
 const app = express();
 
@@ -22,6 +23,11 @@ app.use(express.json());
 app.use(passport.initialize());
 
 app.use(healthRoutes);
+app.get(
+  "/microsoft-redirectLogin",
+  authController.microsoftCallback,
+  authController.microsoftCallbackSuccess,
+);
 app.use("/auth", authRoutes);
 
 sequelize

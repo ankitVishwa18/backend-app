@@ -4,13 +4,17 @@ const authController = require("../controllers/authController");
 
 const router = express.Router();
 
-router.post("/register", authController.register);
-router.post("/login", authController.login);
 router.get("/google", authController.googleAuth);
 router.get(
   "/google/callback",
   authController.googleCallback,
   authController.googleCallbackSuccess,
+);
+router.get("/microsoft", authController.microsoftAuth);
+router.get(
+  "/microsoft/callback",
+  authController.microsoftCallback,
+  authController.microsoftCallbackSuccess,
 );
 router.get("/me", authMiddleware, authController.me);
 router.get("/gmail/messages", authMiddleware, authController.getMyEmails);

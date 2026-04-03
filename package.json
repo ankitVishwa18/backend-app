@@ -18,6 +18,7 @@
     "openai": "^6.27.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
+    "passport-microsoft": "^2.1.0",
     "sequelize": "^6.37.8"
   },
   "devDependencies": {

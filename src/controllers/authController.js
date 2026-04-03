@@ -1,78 +1,10 @@
-const bcrypt = require("bcryptjs");
-const { passport, googleEnabled } = require("../config/passport");
+const { passport, googleEnabled, microsoftEnabled } = require("../config/passport");
 const { User } = require("../models");
 const { createToken } = require("../utils/token");
 const { google } = require("googleapis");
 const { classifySubscriptionEmailsWithAI } = require("../utils/subscriptionClassifier");
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
-
-async function register(req, res) {
-  const { name, email, password } = req.body;
-
-  if (!name || !email || !password) {
-    return res
-      .status(400)
-      .json({ message: "Name, email and password are required" });
-  }
-
-  if (password.length < 6) {
-    return res
-      .status(400)
-      .json({ message: "Password must be at least 6 characters" });
-  }
-
-  try {
-    const existingUser = await User.findOne({ where: { email } });
-    if (existingUser) {
-      return res.status(409).json({ message: "Email already registered" });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    const user = await User.create({
-      name,
-      email,
-      password_hash: passwordHash,
-    });
-
-    const publicUser = { id: user.id, name: user.name, email: user.email };
-    const token = createToken(publicUser);
-
-    return res.status(201).json({ token, user: publicUser });
-  } catch (error) {
-    console.error("register error:", error);
-    return res.status(500).json({ message: "Could not register user" });
-  }
-}
-
-async function login(req, res) {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ message: "Email and password are required" });
-  }
-
-  try {
-    const user = await User.findOne({ where: { email } });
-
-    if (!user || !user.password_hash) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    const passwordMatches = await bcrypt.compare(password, user.password_hash);
-    if (!passwordMatches) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    const publicUser = { id: user.id, name: user.name, email: user.email };
-    const token = createToken(publicUser);
-
-    return res.json({ token, user: publicUser });
-  } catch (error) {
-    console.error("login error:", error);
-    return res.status(500).json({ message: "Could not log in" });
-  }
-}
 
 function googleAuth(req, res, next) {
   if (!googleEnabled) {
@@ -141,6 +73,62 @@ async function googleCallbackSuccess(req, res) {
     return res.redirect(redirectUrl);
   } catch (error) {
     console.error("googleCallbackSuccess error:", error);
+    return res.redirect(`${FRONTEND_URL}/login`);
+  }
+}
+
+function microsoftAuth(req, res, next) {
+  if (!microsoftEnabled) {
+    return res.status(503).json({
+      message:
+        "Microsoft login is not configured. Add MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET.",
+    });
+  }
+
+  return passport.authenticate("microsoft", {
+    session: false,
+    prompt: "select_account",
+  })(req, res, next);
+}
+
+function microsoftCallback(req, res, next) {
+  if (!microsoftEnabled) {
+    return res.redirect(`${FRONTEND_URL}/login`);
+  }
+
+  return passport.authenticate("microsoft", {
+    session: false,
+    failureRedirect: `${FRONTEND_URL}/login`,
+  })(req, res, next);
+}
+
+async function microsoftCallbackSuccess(req, res) {
+  try {
+    const { email, name, microsoftId } = req.user;
+
+    let user = await User.findOne({ where: { microsoft_id: microsoftId } });
+    if (!user) {
+      user = await User.findOne({ where: { email } });
+
+      if (user) {
+        user.microsoft_id = microsoftId;
+        await user.save();
+      } else {
+        user = await User.create({
+          name,
+          email,
+          microsoft_id: microsoftId,
+        });
+      }
+    }
+
+    const publicUser = { id: user.id, name: user.name, email: user.email };
+    const token = createToken(publicUser);
+    const redirectUrl = `${FRONTEND_URL}/oauth-success?token=${encodeURIComponent(token)}`;
+
+    return res.redirect(redirectUrl);
+  } catch (error) {
+    console.error("microsoftCallbackSuccess error:", error);
     return res.redirect(`${FRONTEND_URL}/login`);
   }
 }
@@ -311,11 +299,12 @@ async function getSubscriptionEmails(req, res) {
 }
 
 module.exports = {
-  register,
-  login,
   googleAuth,
   googleCallback,
   googleCallbackSuccess,
+  microsoftAuth,
+  microsoftCallback,
+  microsoftCallbackSuccess,
   getMyEmails,
   getSubscriptionEmails,
   me,

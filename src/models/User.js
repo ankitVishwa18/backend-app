@@ -26,6 +26,11 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
         unique: true,
       },
+      microsoft_id: {
+        type: DataTypes.STRING,
+        allowNull: true,
+        unique: true,
+      },
       created_at: {
         type: DataTypes.DATE,
         allowNull: false,
