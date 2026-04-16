@@ -23,5 +23,10 @@ router.get(
   authMiddleware,
   authController.getSubscriptionEmails,
 );
+router.get(
+  "/microsoft/subscriptions",
+  authMiddleware,
+  authController.getMicrosoftSubscriptionEmails,
+);
 
 module.exports = router;

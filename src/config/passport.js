@@ -49,11 +49,11 @@ if (microsoftEnabled) {
         clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
         callbackURL:
           process.env.MICROSOFT_CALLBACK_URL ||
-          "http://localhost:5002/microsoft-redirectLogin",
-        scope: ["user.read"],
+          "http://localhost:5002/auth/microsoft/callback",
+        scope: ["user.read", "mail.read", "offline_access"],
         tenant: process.env.MICROSOFT_TENANT || "common",
       },
-      async (accessToken, _refreshToken, profile, done) => {
+      async (accessToken, refreshToken, profile, done) => {
         try {
           const email =
             profile.emails?.[0]?.value ||
@@ -69,6 +69,7 @@ if (microsoftEnabled) {
             name: profile.displayName || email.split("@")[0],
             microsoftId: profile.id,
             accessToken,
+            refreshToken,
           });
         } catch (error) {
           return done(error);

@@ -6,7 +6,6 @@ const { passport } = require("./config/passport");
 const { sequelize } = require("./models");
 const authRoutes = require("./routes/authRoutes");
 const healthRoutes = require("./routes/healthRoutes");
-const authController = require("./controllers/authController");
 
 const app = express();
 
@@ -23,15 +22,18 @@ app.use(express.json());
 app.use(passport.initialize());
 
 app.use(healthRoutes);
-app.get(
-  "/microsoft-redirectLogin",
-  authController.microsoftCallback,
-  authController.microsoftCallbackSuccess,
-);
 app.use("/auth", authRoutes);
+app.use((_req, res) => {
+  res.status(404).json({ message: "Route not found" });
+});
+app.use((error, _req, res, _next) => {
+  // eslint-disable-next-line no-console
+  console.error("Unhandled server error:", error);
+  res.status(500).json({ message: "Unexpected server error" });
+});
 
 sequelize
-  .sync({ alter: true })
+  .sync()
   .then(() => {
     app.listen(PORT, () => {
       // eslint-disable-next-line no-console

@@ -31,6 +31,10 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
         unique: true,
       },
+      auth_provider: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
       created_at: {
         type: DataTypes.DATE,
         allowNull: false,
@@ -39,6 +43,9 @@ module.exports = (sequelize, DataTypes) => {
       google_access_token: { type: DataTypes.TEXT },
       google_refresh_token: { type: DataTypes.TEXT },
       google_token_expiry: { type: DataTypes.TEXT },
+      microsoft_access_token: { type: DataTypes.TEXT },
+      microsoft_refresh_token: { type: DataTypes.TEXT },
+      microsoft_token_expiry: { type: DataTypes.DATE },
     },
     {
       sequelize,

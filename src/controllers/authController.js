@@ -1,10 +1,90 @@
-const { passport, googleEnabled, microsoftEnabled } = require("../config/passport");
+const {
+  passport,
+  googleEnabled,
+  microsoftEnabled,
+} = require("../config/passport");
 const { User } = require("../models");
-const { createToken } = require("../utils/token");
+const { createToken } = require("../utils/createToken");
 const { google } = require("googleapis");
-const { classifySubscriptionEmailsWithAI } = require("../utils/subscriptionClassifier");
+const {
+  classifySubscriptionEmailsWithAI,
+} = require("../utils/subscriptionClassifier");
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
+function sendMappedError(res, error, fallbackMessage) {
+  const message = error?.message || fallbackMessage || "Request failed";
+  const lowerMessage = message.toLowerCase();
+
+  if (
+    lowerMessage.includes("mailbox is either inactive") ||
+    lowerMessage.includes("soft-deleted") ||
+    lowerMessage.includes("hosted on-premise")
+  ) {
+    return res.status(400).json({
+      message:
+        "This Microsoft account does not have an active Exchange Online mailbox. Please use an account with a licensed Exchange Online mailbox or ask your Microsoft 365 admin to activate mailbox access.",
+    });
+  }
+
+  if (
+    lowerMessage.includes("admin approval") ||
+    lowerMessage.includes("consent_required") ||
+    lowerMessage.includes("need admin approval")
+  ) {
+    return res.status(403).json({
+      message:
+        "Tenant admin approval is required for Microsoft mail access. Ask your Microsoft 365 admin to grant tenant-wide consent for this app.",
+    });
+  }
+
+  if (
+    error?.statusCode === 401 ||
+    error?.statusCode === 403 ||
+    lowerMessage.includes("invalid_grant") ||
+    lowerMessage.includes("invalid authentication token") ||
+    lowerMessage.includes("invalid credentials") ||
+    lowerMessage.includes("login required") ||
+    lowerMessage.includes("token")
+  ) {
+    return res.status(401).json({
+      message:
+        "Mail access permission is missing or expired. Please login again and approve access.",
+    });
+  }
+
+  if (
+    error?.statusCode === 429 ||
+    lowerMessage.includes("too many requests") ||
+    lowerMessage.includes("quota")
+  ) {
+    return res.status(429).json({
+      message: "Rate limit reached while reading mails. Please try again shortly.",
+    });
+  }
+
+  if (
+    lowerMessage.includes("fetch failed") ||
+    lowerMessage.includes("enotfound") ||
+    lowerMessage.includes("econnreset") ||
+    lowerMessage.includes("etimedout")
+  ) {
+    return res.status(503).json({
+      message: "Mail provider is temporarily unreachable. Please try again in a moment.",
+    });
+  }
+
+  if (error?.code === "ER_DUP_ENTRY") {
+    return res.status(409).json({
+      message: "A user with this account already exists.",
+    });
+  }
+
+  return res.status(500).json({
+    message: fallbackMessage || "Internal server error",
+    error: message,
+  });
+}
 
 function googleAuth(req, res, next) {
   if (!googleEnabled) {
@@ -60,13 +140,19 @@ async function googleCallbackSuccess(req, res) {
     }
 
     user.google_access_token = accessToken || user.google_access_token;
+    user.auth_provider = "google";
     if (refreshToken) {
       user.google_refresh_token = refreshToken;
     }
 
     await user.save();
 
-    const publicUser = { id: user.id, name: user.name, email: user.email };
+    const publicUser = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      provider: user.auth_provider || "google",
+    };
     const token = createToken(publicUser);
     const redirectUrl = `${FRONTEND_URL}/oauth-success?token=${encodeURIComponent(token)}`;
 
@@ -104,7 +190,7 @@ function microsoftCallback(req, res, next) {
 
 async function microsoftCallbackSuccess(req, res) {
   try {
-    const { email, name, microsoftId } = req.user;
+    const { email, name, microsoftId, accessToken, refreshToken } = req.user;
 
     let user = await User.findOne({ where: { microsoft_id: microsoftId } });
     if (!user) {
@@ -122,7 +208,19 @@ async function microsoftCallbackSuccess(req, res) {
       }
     }
 
-    const publicUser = { id: user.id, name: user.name, email: user.email };
+    user.microsoft_access_token = accessToken || user.microsoft_access_token;
+    user.auth_provider = "microsoft";
+    if (refreshToken) {
+      user.microsoft_refresh_token = refreshToken;
+    }
+    await user.save();
+
+    const publicUser = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      provider: user.auth_provider || "microsoft",
+    };
     const token = createToken(publicUser);
     const redirectUrl = `${FRONTEND_URL}/oauth-success?token=${encodeURIComponent(token)}`;
 
@@ -136,17 +234,39 @@ async function microsoftCallbackSuccess(req, res) {
 async function me(req, res) {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ["id", "name", "email"],
+      attributes: [
+        "id",
+        "name",
+        "email",
+        "auth_provider",
+        "google_access_token",
+        "microsoft_access_token",
+      ],
     });
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    return res.json({ user });
+    const provider =
+      user.auth_provider ||
+      (user.microsoft_access_token
+        ? "microsoft"
+        : user.google_access_token
+          ? "google"
+          : null);
+
+    return res.json({
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        provider,
+      },
+    });
   } catch (error) {
     console.error("me error:", error);
-    return res.status(500).json({ message: "Could not fetch user" });
+    return sendMappedError(res, error, "Could not fetch user");
   }
 }
 
@@ -154,7 +274,7 @@ async function getAuthorizedGmailClient(user) {
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_CALLBACK_URL
+    process.env.GOOGLE_CALLBACK_URL,
   );
 
   oauth2Client.setCredentials({
@@ -165,7 +285,8 @@ async function getAuthorizedGmailClient(user) {
   oauth2Client.on("tokens", async (tokens) => {
     if (tokens.access_token) user.google_access_token = tokens.access_token;
     if (tokens.refresh_token) user.google_refresh_token = tokens.refresh_token;
-    if (tokens.expiry_date) user.google_token_expiry = new Date(tokens.expiry_date);
+    if (tokens.expiry_date)
+      user.google_token_expiry = new Date(tokens.expiry_date);
     await user.save();
   });
 
@@ -196,14 +317,15 @@ async function fetchEmailMetadata(gmail, max = 10, filter = "bills") {
         id,
         format: "metadata",
         metadataHeaders: ["From", "Subject", "Date"],
-      })
-    )
+      }),
+    ),
   );
 
   return details.map((item) => {
     const headers = item.data.payload?.headers || [];
     const getHeader = (headerName) =>
-      headers.find((h) => h.name?.toLowerCase() === headerName.toLowerCase())?.value || "";
+      headers.find((h) => h.name?.toLowerCase() === headerName.toLowerCase())
+        ?.value || "";
 
     return {
       id: item.data.id,
@@ -248,7 +370,8 @@ async function getMyEmails(req, res) {
     const filteredEmails =
       filter === "bills"
         ? emails.filter((mail) => {
-            const haystack = `${mail.subject} ${mail.snippet} ${mail.from}`.toLowerCase();
+            const haystack =
+              `${mail.subject} ${mail.snippet} ${mail.from}`.toLowerCase();
             return billKeywords.some((keyword) => haystack.includes(keyword));
           })
         : emails;
@@ -256,10 +379,7 @@ async function getMyEmails(req, res) {
     return res.json({ emails: filteredEmails });
   } catch (error) {
     console.error("getMyEmails error:", error);
-    return res.status(500).json({
-      message: "Failed to fetch Gmail messages",
-      error: error.message,
-    });
+    return sendMappedError(res, error, "Failed to fetch Gmail messages");
   }
 }
 
@@ -291,10 +411,75 @@ async function getSubscriptionEmails(req, res) {
     });
   } catch (error) {
     console.error("getSubscriptionEmails error:", error);
-    return res.status(500).json({
-      message: "Failed to fetch subscription emails",
-      error: error.message,
+    return sendMappedError(res, error, "Failed to fetch subscription emails");
+  }
+}
+
+async function fetchMicrosoftEmailMetadata(accessToken, max = 40) {
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/me/messages?$top=${max}&$select=id,subject,from,receivedDateTime,bodyPreview`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  );
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const graphMessage = payload.error?.message || "Failed to fetch Microsoft emails";
+    const error = new Error(graphMessage);
+    error.statusCode = response.status;
+    throw error;
+  }
+
+  const rows = payload.value || [];
+  return rows.map((mail) => ({
+    id: mail.id,
+    threadId: mail.conversationId || mail.id,
+    snippet: mail.bodyPreview || "",
+    from: mail.from?.emailAddress?.address || "",
+    subject: mail.subject || "",
+    date: mail.receivedDateTime || "",
+  }));
+}
+
+async function getMicrosoftSubscriptionEmails(req, res) {
+  try {
+    const max = Number(req.query.max || 40);
+
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (!user.microsoft_access_token) {
+      return res.status(400).json({
+        message: "Microsoft account not connected with Mail.Read scope",
+      });
+    }
+
+    const emails = await fetchMicrosoftEmailMetadata(
+      user.microsoft_access_token,
+      max,
+    );
+
+    // console.log("emails", emails);
+    const result = await classifySubscriptionEmailsWithAI(emails);
+
+    return res.json({
+      source_count: emails.length,
+      subscriptions: result.subscriptions,
+      summary: result.summary,
+      ai_used: result.ai_used,
+      model_used: result.model_used,
+      warning: result.warning || null,
     });
+  } catch (error) {
+    console.error("getMicrosoftSubscriptionEmails error:", error);
+    return sendMappedError(
+      res,
+      error,
+      "Failed to fetch Microsoft subscription emails",
+    );
   }
 }
 
@@ -307,5 +492,6 @@ module.exports = {
   microsoftCallbackSuccess,
   getMyEmails,
   getSubscriptionEmails,
+  getMicrosoftSubscriptionEmails,
   me,
 };
